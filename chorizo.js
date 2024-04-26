@@ -25,23 +25,22 @@ connection.connect(err => {
 
 app.use(bodyParser.json());
 
-// Middleware för att validera JWT-token
 function validateToken(req, res, next) {
   const authHeader = req.headers['authorization'];
 
   if (!authHeader || !authHeader.startsWith('Bearer ')) {
-    return res.status(401).send('Unauthorized: Missing or invalid token');
+    return res.status(401).send('Unauthorized: Saknar token eller ogiltig token');
   }
 
-  const token = authHeader.slice(7); // Ta bort "Bearer " från token
+  const token = authHeader.slice(7); // Tar bort Bearer grejen från token
 
   try {
     const decoded = jwt.verify(token, JWT_SECRET);
-    req.user = decoded; // Lägg till dekodad användarinfo till request-objektet
-    next(); // Fortsätt till nästa middleware/route
+    req.user = decoded;
+    next();
   } catch (error) {
     console.error('Token validation error:', error);
-    return res.status(401).send('Unauthorized: Invalid token');
+    return res.status(401).send('Unauthorized: ogiltig token');
   }
 }
 
@@ -55,7 +54,6 @@ app.get('/', (req, res) => {
   `);
 });
 
-// Skydda routes med token-validering
 app.get('/users', validateToken, (req, res) => {
   const sql = 'SELECT * FROM users';
   connection.query(sql, (error, results) => {
@@ -81,7 +79,7 @@ app.post('/users', validateToken, async (req, res) => {
   const { username, name, password } = req.body;
 
   if (!username || !name || !password) {
-    return res.status(422).json({ error: "Missing required fields" });
+    return res.status(422).json({ error: "Du har inte skrivit in i alla fält!" });
   }
 
   try {
@@ -107,7 +105,7 @@ app.put('/users/:id', validateToken, async (req, res) => {
   const { username, name, password } = req.body;
 
   if (!username || !name || !password) {
-    return res.status(400).send('Username, name, and password are required');
+    return res.status(400).send('Username, name, and password är obligatoriskt');
   }
 
   try {
@@ -142,14 +140,14 @@ app.post('/login', async (req, res) => {
     }
 
     if (results.length === 0) {
-      return res.status(401).send('Authentication failed: User not found');
+      return res.status(401).send('Authentication failed: Användare finns inte');
     }
 
     const user = results[0];
 
     const passwordMatch = await bcrypt.compare(password, user.password);
     if (!passwordMatch) {
-      return res.status(401).send('Authentication failed: Incorrect password');
+      return res.status(401).send('Authentication failed: Ogiltigt password');
     }
 
     const token = jwt.sign({ sub: user.id, name: user.name }, JWT_SECRET, { expiresIn: '2h' });
@@ -158,9 +156,7 @@ app.post('/login', async (req, res) => {
   });
 });
 
-// Route för att hämta information om den inloggade användaren
 app.get('/users/me', validateToken, (req, res) => {
-  // Användarinformation finns i req.user från token-valideringen
   const { sub: userId, name } = req.user;
   res.json({ userId, name });
 });
