@@ -3,9 +3,10 @@ const mysql = require('mysql');
 const bodyParser = require('body-parser');
 const bcrypt = require('bcryptjs');
 const jwt = require('jsonwebtoken');
-
 const app = express();
 const PORT = 3000;
+
+const JWT_SECRET = 'benjaminsyrsa';
 
 const connection = mysql.createConnection({
   host: "localhost",
@@ -24,28 +25,23 @@ connection.connect(err => {
 
 app.use(bodyParser.json());
 
-const JWT_SECRET = 'superhemlignyckel';
-
-function generateToken(userId, username) {
-  return jwt.sign({ sub: userId, username }, JWT_SECRET, { expiresIn: '2h' });
-}
-
-function authenticateToken(req, res, next) {
+// Middleware för att validera JWT-token
+function validateToken(req, res, next) {
   const authHeader = req.headers['authorization'];
 
-  if (authHeader === undefined) {
-    return res.status(401).send("Wlla auth token saknas bre!");
+  if (!authHeader || !authHeader.startsWith('Bearer ')) {
+    return res.status(401).send('Unauthorized: Missing or invalid token');
   }
 
-  const token = authHeader.slice(7);
+  const token = authHeader.slice(7); // Ta bort "Bearer " från token
 
   try {
     const decoded = jwt.verify(token, JWT_SECRET);
-    req.userInfo = { userId: decoded.sub, username: decoded.username };
-    next();
+    req.user = decoded; // Lägg till dekodad användarinfo till request-objektet
+    next(); // Fortsätt till nästa middleware/route
   } catch (error) {
-    console.error(error);
-    return res.status(401).send("Invalid auth token");
+    console.error('Token validation error:', error);
+    return res.status(401).send('Unauthorized: Invalid token');
   }
 }
 
@@ -59,7 +55,8 @@ app.get('/', (req, res) => {
   `);
 });
 
-app.get('/users', authenticateToken, (req, res) => {
+// Skydda routes med token-validering
+app.get('/users', validateToken, (req, res) => {
   const sql = 'SELECT * FROM users';
   connection.query(sql, (error, results) => {
     if (error) throw error;
@@ -67,7 +64,7 @@ app.get('/users', authenticateToken, (req, res) => {
   });
 });
 
-app.get('/users/:id', authenticateToken, (req, res) => {
+app.get('/users/:id', validateToken, (req, res) => {
   const userId = req.params.id;
   const sql = 'SELECT * FROM users WHERE id = ?';
   connection.query(sql, [userId], (error, results) => {
@@ -80,7 +77,32 @@ app.get('/users/:id', authenticateToken, (req, res) => {
   });
 });
 
-app.put('/users/:id', authenticateToken, async (req, res) => {
+app.post('/users', validateToken, async (req, res) => {
+  const { username, name, password } = req.body;
+
+  if (!username || !name || !password) {
+    return res.status(422).json({ error: "Missing required fields" });
+  }
+
+  try {
+    const hashedPassword = await bcrypt.hash(password, 10);
+    const sql = 'INSERT INTO users (username, name, password) VALUES (?, ?, ?)';
+    connection.query(sql, [username, name, hashedPassword], (error, result) => {
+      if (error) throw error;
+      const createdUser = {
+        id: result.insertId,
+        username: username,
+        name: name
+      };
+      res.json(createdUser);
+    });
+  } catch (error) {
+    console.error('Error hashing password:', error);
+    return res.status(500).send('Internal Server Error');
+  }
+});
+
+app.put('/users/:id', validateToken, async (req, res) => {
   const userId = req.params.id;
   const { username, name, password } = req.body;
 
@@ -109,31 +131,6 @@ app.put('/users/:id', authenticateToken, async (req, res) => {
   }
 });
 
-app.post('/users', authenticateToken, async (req, res) => {
-  const { username, name, password } = req.body;
-
-  if (!username || !name || !password) {
-    return res.status(422).json({ error: "Missing required fields" });
-  }
-
-  try {
-    const hashedPassword = await bcrypt.hash(password, 10);
-    const sql = 'INSERT INTO users (username, name, password) VALUES (?, ?, ?)';
-    connection.query(sql, [username, name, hashedPassword], (error, result) => {
-      if (error) throw error;
-      const createdUser = {
-        id: result.insertId,
-        username: username,
-        name: name
-      };
-      res.json(createdUser);
-    });
-  } catch (error) {
-    console.error('Error hashing password:', error);
-    return res.status(500).send('Internal Server Error');
-  }
-});
-
 app.post('/login', async (req, res) => {
   const { username, password } = req.body;
 
@@ -155,26 +152,17 @@ app.post('/login', async (req, res) => {
       return res.status(401).send('Authentication failed: Incorrect password');
     }
 
-    const token = generateToken(user.id, user.username);
+    const token = jwt.sign({ sub: user.id, name: user.name }, JWT_SECRET, { expiresIn: '2h' });
+
     res.json({ token });
   });
 });
 
-app.get('/users/me', authenticateToken, (req, res) => {
-  const userId = req.userInfo.userId;
-  const sql = 'SELECT * FROM users WHERE id = ?';
-  connection.query(sql, [userId], (error, results) => {
-    if (error) {
-      console.error('Error retrieving user:', error.message);
-      return res.status(500).send('Internal Server Error');
-    }
-    if (results.length === 0) {
-      return res.status(404).send('User not found');
-    }
-    const user = results[0];
-    delete user.password;
-    res.json(user);
-  });
+// Route för att hämta information om den inloggade användaren
+app.get('/users/me', validateToken, (req, res) => {
+  // Användarinformation finns i req.user från token-valideringen
+  const { sub: userId, name } = req.user;
+  res.json({ userId, name });
 });
 
 app.listen(PORT, () => {
